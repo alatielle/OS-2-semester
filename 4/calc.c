@@ -1,23 +1,34 @@
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
+#include <sys/mman.h>
+#include <sys/stat.h>      
+#include <fcntl.h> 
 #include "mylib.h"
 #define ROW 17
 #define COL 17
 
-int world[ROW][COL]; //future shared mem
 int world2[ROW][COL];
+int size = ROW*COL*4;
 
-void init() {
+int init() {
 	FILE *f;
 	int x, y;
-	memset(world, 0, ROW*COL);
-	memset(world2, 0, ROW*COL);
+	memset(world2, 0, size);
 	f = fopen("input2.txt", "r");
 	if(f) {
 		while(!feof(f)) {
 			fscanf(f, "%d", &x);
+			if(x>=ROW || x<0) {
+				perror("Bad data file");
+				return 1;
+			}
 			fscanf(f, "%d", &y);
-			world[x][y]=1;
+			if(y>=COL || y<0) {
+				perror("Bad data file");
+				return 1;
+			}
+			world[x*ROW + y]=1;
 			world2[x][y]=1;
 		}
 		fclose(f);
@@ -25,61 +36,101 @@ void init() {
 
 }
 
+#define ATROW ROW*
+#define ATCOL +
+
 void nextGen() {
 	int i,j,count;
 	for(i = 0; i < ROW; i++ ) {
   		for( j = 0; j < COL; j++ ) {
 			count=0;
-			if ( world[ (i+ROW-1)%ROW ] [ (j+COL - 1)%COL ] == 1 ) count++;
-    			if ( world [ i ] [ (j - 1 + COL) % COL ] == 1 ) count++; 
-			if ( world [ (i + 1) % ROW ] [ (j - 1 + COL) % COL ] == 1 )  count++;
-			if ( world [ (i - 1 + ROW) % ROW ] [ j ] == 1 )  count++;
-			if ( world [ (i + 1) % ROW ] [ j ] == 1 )  count++;
-			if ( world [ (i - 1 + ROW) % ROW ] [ (j + 1) % COL ] == 1 ) count++;
-			if ( world [ i ] [ (j + 1) % COL ] == 1 ) count++;
-			if ( world [ (i + 1) % ROW ] [ (j + 1) % COL ] == 1 ) count++;
-   	 		if (( world[i][j]==1 && count==2 )||count==3) world2[i][j]=1;
+			if ( world [ ATROW ( (i+ROW-1)%ROW )	ATCOL ( (j+COL-1)%COL ) ] == 1 ) count++;
+    			if ( world [ ATROW ( i )		ATCOL ( (j-1+COL)%COL ) ] == 1 ) count++; 
+			if ( world [ ATROW ( (i+1)%ROW )	ATCOL ( (j-1+COL)%COL ) ] == 1 ) count++;
+			if ( world [ ATROW ( (i-1+ROW)%ROW )	ATCOL ( j ) ] == 1 ) count++;
+			if ( world [ ATROW ( (i+1)%ROW )	ATCOL ( j ) ] == 1 ) count++;
+			if ( world [ ATROW ( (i-1+ROW)%ROW )	ATCOL ( (j+1)%COL ) ] == 1 ) count++;
+			if ( world [ ATROW ( i )		ATCOL ( (j+1)%COL ) ] == 1 ) count++;
+			if ( world [ ATROW ( (i+1)%ROW )	ATCOL ( (j+1)%COL ) ] == 1 ) count++;
+   	 		if (( world[ ATROW(i) ATCOL(j) ] == 1 && count==2 )||count==3) world2[i][j]=1;
 			else world2[i][j]=0;
 		}
 	}
-/*for (i=0; i<ROW; ++i)
- for (j=0; j<COL; ++j)
-	world[i][j]=world2[i][j];*/
-	memcpy(world, world2, ROW*COL*4);
-//printf(" worldscr: %d\n",world[1][5]);
+	memcpy(world, world2, size);
 }
 
 void display() {
 	int x, y;
 	for(x=0; x < ROW; x++) {
 		for(y=0; y < COL; y++) {
-			if (world[x][y]==0)
+			if (world[ ATROW(x) ATCOL(y) ] == 0)
 			{
 				printf(" ");
 			} else
 				printf("X");
-   			//printf("%d ", world[x][y]);
- 		}
+   			}
 		puts("\n");
   	}
-	puts("--------------------\n");
+}
+
+void sahandler(int signo, siginfo_t *info, void *context) {
+	nextGen();
+	alarm(1);
 }
 
 int main() {
-	init();
-	display();
-	int a;
-	while(1) {
-		a=mygetch();
-		if(a==ESC) break;
-//TODO timer
-		if(a==10) {
-		nextGen();
-		display();
-		}
-		
+/*----shared memory----*/
+	int fd;
+	char *world;
+	long int pgs = sysconf(_SC_PAGESIZE);
+	int msize = size; //ROW*COL*4
+	if ( (fd = shm_open("world", O_CREAT|O_RDWR , 0777)) == -1 ) {
+		perror("shm_open");
+		return 1;
 	}
-	return 0;
+	if(msize%pgs != 0) {
+		msize -= msize%pgs - pgs;
+	}
+	if ( ftruncate(fd, msize) == -1 )  {
+		perror("ftruncate");
+		return 1;
+	}
+	world = mmap(0, msize, PROT_WRITE|PROT_READ, MAP_SHARED, fd, 0);
+	if ( world == (char*)-1 ) {
+		perror("mmap");
+		return 1;
+	}
+	memset(world, 0, size);
+/*----pipe----*/
+/*----fork----*/	
+	pid_t p = fork();
+	if(p>0) {
+		if( !init() ) {
+			struct sigaction sa;
+			struct sigaction previoussa;
+			memset(&sa, 0, sizeof(sa));
+			sa.sa_flags = SA_SIGINFO;
+			sa.sa_sigaction = sahandler;
+			if (sigaction(SIGALRM, &sa, &previoussa)<0) {
+				perror("Sigaction failure");
+				return 1;
+			}
+			alarm(1);
+			int a;
+			while(1) {
+				//TODO pipe
+				a=mygetch();
+				if(a==ESC) break;
+			}
+			return 0;
+		}
+		else {
+			return 1;
+		}
+	} else {
+//client part
+	}
+	
 }
 
 
