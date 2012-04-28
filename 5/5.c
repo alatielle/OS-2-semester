@@ -52,7 +52,12 @@ int main(int argc, char * argv[])
 		stop[i]=0;
 		memset(&cba[i], 0, sizeof(struct aiocb));
 		int fd;
-		sscanf(argv[i+1],"%d",&fd);
+		if (sscanf(argv[i+1],"%d",&fd)==0)
+		{
+			printf("Wrong params");
+			freeAll();
+			exit(1);
+		}
 		if (fd<0)
 		{
 			perror("Open failure");
