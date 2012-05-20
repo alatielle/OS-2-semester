@@ -188,6 +188,7 @@ int main() {
 				return 1;
 			}
 			if (readres>0)
+			{
 				switch (c[0])
 				{
 					case 'E':
@@ -202,7 +203,6 @@ int main() {
 						sending=0;
 				}
 			}
-			//return 0;
 		}
 		else {
 			return 1;
